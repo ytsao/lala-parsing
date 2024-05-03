@@ -13,6 +13,7 @@ option(LALA_PARSING_BUILD_EXAMPLES "LALA_PARSING_BUILD_EXAMPLES" OFF)
 option(LOCAL_DEPS "LOCAL_DEPS" OFF)
 option(WITH_XCSP3PARSER "Add support for parsing XCSP3 .xml files" ON)
 
+
 if(MSVC)
   # XCSP3-CPP-Parser has dependencies on gcc that break MSVC
   set(WITH_XCSP3PARSER OFF)
@@ -34,7 +35,8 @@ if(LOCAL_DEPS)
   endif()
 
   FetchContent_Declare(cpp_peglib SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../cpp-peglib/")
-
+  
+  FetchContent_Declare(onnx SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../onnx/")
 else()
   FetchContent_Declare(
     lala_core
@@ -55,15 +57,23 @@ else()
     GIT_REPOSITORY "https://github.com/ptal/cpp-peglib.git"
     GIT_TAG        5637c1f5ca616913f7e3a1d601178977505c784f
   )
+  
+  FetchContent_Declare(
+    onnx
+    GIT_REPOSITORY 	"https://github.com/ytsao/onnx.git"
+    GIT_TAG		main
+  )
 endif()
 
-FetchContent_MakeAvailable(lala_core ${XCSP3PARSER} cpp_peglib)
+FetchContent_MakeAvailable(lala_core ${XCSP3PARSER} cpp_peglib onnx)
 
 # Preparing the library
 
+# include_directories("/home/yinungtsao/code/lattice-land/onnx/onnx/")
 add_library(lala_parsing INTERFACE)
-target_include_directories(lala_parsing INTERFACE include ${LIBXML2_INCLUDE_DIR})
-target_link_libraries(lala_parsing INTERFACE lala_core ${XCSP3PARSER} cpp_peglib)
+target_include_directories(lala_parsing INTERFACE include ${LIBXML2_INCLUDE_DIR} onnx)
+target_link_libraries(lala_parsing INTERFACE lala_core ${XCSP3PARSER} cpp_peglib protobuf)
+
 target_compile_options(lala_parsing INTERFACE
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/Zc:__cplusplus /utf-8 /fp:strict>
     "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CUDA_COMPILER_ID:NVIDIA>,$<CXX_COMPILER_ID:MSVC>>:SHELL:--compiler-options /Zc:__cplusplus>"
@@ -79,13 +89,18 @@ target_compile_options(lala_parsing INTERFACE
 
 if(LALA_PARSING_BUILD_EXAMPLES)
 
-if(WITH_XCSP3PARSER)
-add_executable(example_xcsp3 example/xcsp3/xcsp3.cpp)
-target_link_libraries(example_xcsp3 PRIVATE lala_parsing)
-endif()
+#if(WITH_XCSP3PARSER)
+#add_executable(example_xcsp3 example/xcsp3/xcsp3.cpp)
+#target_link_libraries(example_xcsp3 PRIVATE lala_parsing)
+#endif()
 
-add_executable(example_flatzinc example/flatzinc/flatzinc.cpp)
-target_link_libraries(example_flatzinc PRIVATE lala_parsing)
+#add_executable(example_flatzinc example/flatzinc/flatzinc.cpp)
+#target_link_libraries(example_flatzinc PRIVATE lala_parsing)
+
+add_executable(example_smt example/smt/smt.cpp)
+target_link_libraries(example_smt PRIVATE lala_parsing)
+# target_link_libraries(example_smt PRIVATE protobuf)
+# target_include_directories(example_smt PRIVATE onnx)
 
 endif()
 
