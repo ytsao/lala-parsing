@@ -9,7 +9,7 @@
 #include <fstream>
 #include <streambuf>
 #include "peglib.h"
-#include "onnx/onnx.proto3.pb.h"
+#include "onnx.proto3.pb.h"
 
 #include "battery/shared_ptr.hpp"
 #include "lala/logic/ast.hpp"
@@ -60,7 +60,7 @@ public:
     {}
 };
 
-
+    
 namespace impl{
 /**/
 inline logic_real string_to_real(const std::string& s){
@@ -79,6 +79,7 @@ inline logic_real string_to_real(const std::string& s){
     return battery::make_tuple(lb, ub);
 }
 
+    
 template<class Allocator> 
 class SMTParser{
     using allocator_type = Allocator;
@@ -87,10 +88,8 @@ class SMTParser{
     using Set = logic_set<F>;
     using So = Sort<allocator_type>;
     using bstring = battery::string<Allocator>;
-    using FSeq = typename F::Sequence;
+    using FSeq = typename F::Sequence; 
 
-    std::map<std::string, F> params; // Name and value of the parameters occuring in the model.
-    std::map<std::string, int> arrays; // Size of all named arrays (parameters and variables).
     bool error; // If an error was found during parsing.
     bool silent; // If we do not want to output error messages.
     SMTOutput<Allocator>& output;
@@ -110,55 +109,163 @@ public:
     SMTParser(SMTOutput<Allocator>& output): error(false), silent(false), output(output){}
 
     battery::shared_ptr<F, allocator_type> parse(const std::string& input){
+        //TODO: Missing implementation about post-condition contains 'and' & 'or' operators
         peg::parser parser(R"(
-            # Grammar for SMT format files
-            Statement <- (Identifier)
+            Statements <- ( '(' VariableDeclaration ')' / '(' InputRegion ')' / '(' Property ')' / Comment)+
 
-            Identifier <- 'declare-const' / 'assert'
+            VariableDeclaration <- 'declare-const' VariableName ValueType
+            VariableName <- < [a-zA-Z][a-zA-Z0-9_]* >
+            ValueType <- 'Real'
+            Value <- < (
+                'inf'
+                / '-inf'
+                / [+-]? [0-9]+ (('.' (&'..' / !'.') [0-9]*) / ([Ee][+-]?[0-9]+)) ) >
 
-            VariableName <- [X/Y]_[Integer]
-            ValueType <- Real
-            Real <- < (
-                    'inf'
-                /   '-inf'
-                /   [+-]? [0-9]+ (('.' (&'..' / !'.') [0-9]*) / ([Ee][+-]?[0-9]+)) ) >
-            Integer <- < [+-]?[0-9]+ >
+            InputRegion <- 'assert' '(' Signs VariableName Value ')' 
+            Property <- 'assert' '(' Signs VariableName VariableName ')'
 
-
-            ConstraintType <- 'or' / 'and'
             Signs <- '<=' / '>='
 
+            ~Comment    <- ';' [^\n\r]* [ \n\r\t]*
             %whitespace <- [ \n\r\t]*
         )");
 
-        assert(static_cast<bool>(parser) = true);
+        assert(static_cast<bool>(parser) == true);
 
-        parser["Integer"] = [](const SV& sv) {return F::make_z(sv.token_to_number<logic_int>());};
-        parser["Real"] = [](const SV& sv) {return F::make_real(string_to_real(sv.token_to_string())); };
-        parser["Identifier"] = [](const SV& sv) {return sv.token_to_string();};
-        parser["VariableName"] = [](const SV& sv){};
-        parser["ValueType"] = [](const SV& sv){};        
-        parser["ConstraintType"] = [](const SV& sv){};
-        parser["Signs"] = [](const SV& sv){};
+        parser["Value"] =[](const SV& sv){return F::make_real(string_to_real(sv.token_to_string()));};
+        parser["InputRegion"] = [](const SV& sv) {return sv.token_to_string();};
+        parser["VariableDeclaration"] = [](const SV& sv){F();}; // work, but, why F()?
+        parser["Property"] = [](const SV& sv){return sv.token_to_string();};
+        parser["VariableName"] = [](const SV& sv){return sv.token_to_string();}; 
+        parser["ValueType"] = [](const SV& sv){return sv.token_to_string();};
+        parser["Signs"] = [](const SV& sv){return sv.token_to_string();};
+        parser["Statements"] = [this](const SV& sv){return make_statements(sv);}; // error, bad_any_cast()
+        
         parser.set_logger([](size_t line, size_t col, const std::string& msg, const std::string& rule){
             std::cerr << line << ":" << col << ": " << msg << "\n";
         });
 
         F f;
         if (parser.parse(input.c_str(), f) && !error){
-            // return battery::
-            std::cout << "Parsing successful" << std::endl;
+            return battery::make_shared<TFormula<Allocator>, Allocator>(std::move(f));
         }
         else{
             return nullptr;
         }
     }
 
-    void test(){
-        std::cout << "Test" << std::endl;   
-    }
 private:
 
+    /*
+    from vnnlib file information
+    */
+    static F f(const std::any& any){
+        return std::any_cast<F>(any);
+    }
+
+    static battery::tuple<F, F> itv(const std::any& any){
+        return std::any_cast<battery::tuple<F, F>>(any);
+    }
+
+    F make_error(const SV& sv, const std::string& msg){
+        if (!silent){
+            std::cerr << sv.line_info().first << ":" << sv.line_info().second << ": " << msg << std::endl;
+        }
+        error = true;
+        return F::make_false();
+    }
+
+    F make_statements(const SV& sv){
+        std::cout << "test make_statements function" << std::endl;
+        if (sv.size() == 1){
+            return f(sv[0]);
+        }
+        else{
+            FSeq children;
+            for (int i = 0; i < sv.size(); ++i){
+                F formula = f(sv[i]);
+                if (!formula.is_true()){
+                    children.push_back(formula);
+                }
+            }
+            return F::make_nary(AND, std::move(children));
+        }
+    }
+    
+    F make_variable_init_declaration(const SV& sv){
+        auto name = std::any_cast<std::string>(sv[1]);
+        auto var_decl = make_variable_declaration(sv, name, sv[0], sv[2]);
+        
+        if (sv.size() == 4){
+            return F::make_binary(std::move(var_decl), AND, 
+                F::make_binary(
+                    F::make_lvar(UNTYPED, LVar<allocator_type>(name.data))),
+                    EQ, 
+                    f(sv[3])
+                );
+        }
+        else{
+            return std::move(var_decl);
+        }
+    }
+
+    F make_variable_declaration(const SV& sv, const std::string& name, const std::any& typeVar, const std::any& annots){
+        try{
+            auto ty = std::any_cast<So>(typeVar);
+            return make_existential(sv, ty, name, annots);
+        }
+        catch(std::bad_any_cast){
+            auto typeValue = f(typeVar);
+            auto inConstraint = F::make_binary(F::make_lvar(UNTYPED, LVar<allocator_type>(name.data())), IN, typeValue);
+            auto sort = typeValue.sort();
+            if (!sort.has_value() || !sort->is_set()){
+                return make_error(sv, "We only type-value of variables to be of type Set.");
+            }
+            auto exists = make_existential(sv, *(sort->sub), name, annots);
+            return F::make_binary(std::move(exists), AND, std::move(inConstraint));
+        }
+    }
+
+    F make_existential(const SV& sv, const So& ty, const std::string& name, const std::any& sv_annots){
+        auto f = F::make_exists(UNTYPED, LVar<allocator_type>(name.data()), ty);
+        auto annots = std::any_cast<SV>(sv_annots);
+        return update_with_annotations(sv, f, annots);
+    }
+
+    F update_with_annotations(const SV& sv, F formula, const SV& annots){
+        for(int i = 0; i < annots.size(); ++i){
+            auto annot = std::any_cast<SV>(annots[i]);
+            auto name = std::any_cast<std::string>(annot[0]);
+            if (name == "abstract"){
+                AType ty = f(annot[1]).z(); // assignment of logic_int (int64_t) to ty (int) truncates ty (bug?)
+                formula.type_as(ty);
+            }
+            else if (name == "is_defined_var"){}
+            else if (name == "defines_var") {}
+            else if (name == "var_is_introduced"){}
+            else if (name == "output_var" && formula.is(F::E)){
+                output.add_var(battery::get<0>(formula.exists()));
+            }
+            else if (name == "output_array" && formula.is(F::E)){
+                auto array_name = std::any_cast<std::string>(sv[2]);
+                auto dims = std::any_cast<SV>(annot[1]);
+                output.add_array_var(array_name, battery::get<0>(formula.exists()), dims);
+            }
+            else{
+                if (!ignored_annotations.contains(name)){
+                    ignored_annotations.insert(name);
+                    std::cerr << "% WARNING: ANnotation " + name + " is unknown and was ignored." << std::endl;
+                }
+            }
+        }
+        return std::move(formula);
+    }
+
+
+
+    /*
+    from onnx file information
+    */   
     size_t get_num_inputs(const std::string onnx_filename){
         size_t result = 0;
 
@@ -203,6 +310,9 @@ private:
             }
         }
 
+        std::cout << "ok" << std::endl;
+
+
         return result;
     }
 
@@ -225,6 +335,7 @@ private:
                 assert(output_dim == tensor.raw_data().size() / sizeof(float));
                 for (int i = 0; i < output_dim; i++){
                     result.push_back(&data[i]);
+                    std::cout << data[i] << std::endl;
                 }
             }
         }
@@ -237,6 +348,29 @@ private:
 
         return result;
     }
+
+    void test(){
+        std::ifstream input("test_tiny.onnx", std::ios::ate | std::ios::binary); // open file and move current position in file to the end
+
+        std::streamsize size = input.tellg(); // get current position in file
+        input.seekg(0, std::ios::beg); // move to start of file
+
+        std::vector<char> buffer(size);
+        input.read(buffer.data(), size); // read raw data
+
+        onnx::ModelProto model;
+        model.ParseFromArray(buffer.data(), size); // parse protobuf
+
+        auto graph = model.graph();
+
+        // std::cout << "graph inputs:\n";
+        // print_io_info(graph.input());
+
+        // std::cout << "graph outputs:\n";
+        // print_io_info(graph.output());
+    }
+
+
 };
 }
 
@@ -253,6 +387,7 @@ private:
     template<class Allocator>
     battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt(const std::string& filename, SMTOutput<Allocator>& output){
         std::ifstream t(filename);
+
         if(t.is_open()){
             std::string input((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
             return parse_smt_str(input, output);

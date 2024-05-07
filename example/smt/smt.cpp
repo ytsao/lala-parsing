@@ -4,11 +4,6 @@
 #include <iostream>
 
 
-void testing(lala::SMTOutput<battery::standard_allocator>& smt_output){
-    lala::impl::SMTParser<battery::standard_allocator> smt_parser(smt_output);
-    smt_parser.test();
-}
-
 
 int main(){
     std::cout << "-------------------- Start SMT file parsing test --------------------" << std::endl;
@@ -16,15 +11,22 @@ int main(){
     // auto f = lala::parse_smt<battery::standard_allocator>("test.smt");
     // -> test.smt does not exist:
 
-    // testing section
-    const battery::standard_allocator allocator = battery::standard_allocator();
-    lala::SMTOutput<battery::standard_allocator> smt_output(allocator);
-    testing(smt_output);    
-    
+    // test for onnx file parsing
+    // test();
 
-
+    // test for vnnlib file parsing
+    // auto f = lala::parse_smt<battery::standard_allocator>("test_prop.vnnlib");
+    // if(!f) {
+    //     std::cerr << "Could not parse the SMT file test_prop.vnnlib" << std::endl;
+    //     return 1;
+    // }
+    // else {
+    //     std::cout << "Successful parsing of the file test_prop.vnnlib" << std::endl;
+    //     std::cout << "Show parsed data:" << std::endl;
+        
+    // }
     
-    std::cout << "-------------------- End SMT file parsing test --------------------" << std::endl;
+    std::cout << "\n-------------------- End SMT file parsing test --------------------" << std::endl;
 
 
     return 0;

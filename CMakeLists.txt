@@ -13,7 +13,6 @@ option(LALA_PARSING_BUILD_EXAMPLES "LALA_PARSING_BUILD_EXAMPLES" OFF)
 option(LOCAL_DEPS "LOCAL_DEPS" OFF)
 option(WITH_XCSP3PARSER "Add support for parsing XCSP3 .xml files" ON)
 
-
 if(MSVC)
   # XCSP3-CPP-Parser has dependencies on gcc that break MSVC
   set(WITH_XCSP3PARSER OFF)
@@ -22,6 +21,10 @@ endif()
 if(WITH_XCSP3PARSER)
   set(XCSP3PARSER xcsp3parser)
 endif()
+
+
+set(CMAKE_CXX_STANDARD 17)
+
 
 # Dependencies
 
@@ -36,7 +39,6 @@ if(LOCAL_DEPS)
 
   FetchContent_Declare(cpp_peglib SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../cpp-peglib/")
   
-  FetchContent_Declare(onnx SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../onnx/")
 else()
   FetchContent_Declare(
     lala_core
@@ -65,14 +67,13 @@ else()
   )
 endif()
 
-FetchContent_MakeAvailable(lala_core ${XCSP3PARSER} cpp_peglib onnx)
+FetchContent_MakeAvailable(lala_core ${XCSP3PARSER} cpp_peglib)
 
 # Preparing the library
 
-# include_directories("/home/yinungtsao/code/lattice-land/onnx/onnx/")
 add_library(lala_parsing INTERFACE)
-target_include_directories(lala_parsing INTERFACE include ${LIBXML2_INCLUDE_DIR} onnx)
-target_link_libraries(lala_parsing INTERFACE lala_core ${XCSP3PARSER} cpp_peglib protobuf)
+target_include_directories(lala_parsing INTERFACE include ${LIBXML2_INCLUDE_DIR})
+target_link_libraries(lala_parsing INTERFACE lala_core ${XCSP3PARSER} cpp_peglib)
 
 target_compile_options(lala_parsing INTERFACE
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/Zc:__cplusplus /utf-8 /fp:strict>
