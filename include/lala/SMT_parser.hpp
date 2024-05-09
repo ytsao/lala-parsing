@@ -58,6 +58,34 @@ public:
         : output_vars(other.output_vars, allocator)
         , output_arrays(other.output_arrays, allocator)
     {}
+
+    void add_array_var(const std::string& name, const bstring& var_name, const peg::SemanticValues& sv){
+        int idx = -1;
+        auto array_name = bstring(name.data());
+        for (int i = 0; i < output_arrays.size(); ++i){
+            if (battery::get<0>(output_arrays[i]) == array_name){
+                idx = i;
+                break;
+            }
+        }
+        if (idx == -1){
+            output_arrays.push_back(battery::make_tuple<bstring, array_dim_t, bvector<bstring>>(bstring(array_name), {}, {}));
+            idx = static_cast<int>(output_arrays.size()) - 1;
+            // Add the dimension of the array.
+            for (int i = 0; i < sv.size(); ++i){
+                auto range = std::any_cast<F>(sv[i]);
+                for (int j = 0; j < range.s().size(); ++j){
+                    const auto& itv = range.s()[j];
+                    battery::get<1>(output_arrays[idx]).push_back(battery::make_tuple(battery::get<0>(itv).z(), battery::get<1>(itv).z()));
+                }
+            }
+        }
+        battery::get<2>(output_arrays[idx]).push_back(var_name);
+    }
+
+    void add_var(const bstring& var_name){
+        output_vars.push_back(var_name);
+    }
 };
 
     
@@ -98,33 +126,30 @@ class SMTParser{
     // It is used to avoid printing an error message more than once per annotation.
     std::set<std::string> ignored_annotations;
 
-    enum class TableKind{
-        PLAIN, 
-        SHORT,
-        COMPRESSED,
-        BASIC
-    };
-
 public: 
     SMTParser(SMTOutput<Allocator>& output): error(false), silent(false), output(output){}
 
     battery::shared_ptr<F, allocator_type> parse(const std::string& input){
         //TODO: Missing implementation about post-condition contains 'and' & 'or' operators
         peg::parser parser(R"(
-            Statements <- ( '(' VariableDeclaration ')' / '(' InputRegion ')' / '(' Property ')' / Comment)+
+            Statements <- ( '(' VariableDeclaration ')' / '(' BoundConstr ')' / '(' PropertyConstr ')' / Comment)+
 
-            VariableDeclaration <- 'declare-const' VariableName ValueType
-            VariableName <- < [a-zA-Z][a-zA-Z0-9_]* >
-            ValueType <- 'Real'
-            Value <- < (
+            VariableDeclaration <- 'declare-const' Identifier Type
+            VariableName <- Identifier
+            Identifier <- < [a-zA-Z][a-zA-Z0-9_]* >
+            Type <- RealType
+            RealType <- 'Real'
+            Constant <- < (
                 'inf'
                 / '-inf'
                 / [+-]? [0-9]+ (('.' (&'..' / !'.') [0-9]*) / ([Ee][+-]?[0-9]+)) ) >
 
-            InputRegion <- 'assert' '(' Signs VariableName Value ')' 
-            Property <- 'assert' '(' Signs VariableName VariableName ')'
+            BoundConstr <- 'assert' '(' Operators VariableName Constant ')' 
+            PropertyConstr <- 'assert' '(' Operators VariableName VariableName ')'
+            ConstraintDeclaration <- 'assert' '(' Constraint ')'
+            Constraint <- (Operators VariableName (Constant / VariableName))+
 
-            Signs <- '<=' / '>='
+            Operators <- ('<=' / '>=' / '>' / '<' / 'and' / 'or' / '(' / ')' )
 
             ~Comment    <- ';' [^\n\r]* [ \n\r\t]*
             %whitespace <- [ \n\r\t]*
@@ -132,13 +157,15 @@ public:
 
         assert(static_cast<bool>(parser) == true);
 
-        parser["Value"] =[](const SV& sv){return F::make_real(string_to_real(sv.token_to_string()));};
-        parser["InputRegion"] = [](const SV& sv) {return sv.token_to_string();};
-        parser["VariableDeclaration"] = [](const SV& sv){F();}; // work, but, why F()?
-        parser["Property"] = [](const SV& sv){return sv.token_to_string();};
-        parser["VariableName"] = [](const SV& sv){return sv.token_to_string();}; 
-        parser["ValueType"] = [](const SV& sv){return sv.token_to_string();};
-        parser["Signs"] = [](const SV& sv){return sv.token_to_string();};
+        parser["Constant"] =[](const SV& sv){return F::make_real(string_to_real(sv.token_to_string()));};
+        parser["BoundConstr"] = [this](const SV& sv) {return make_bound_constraint_declaration(sv);};
+        parser["VariableDeclaration"] = [this](const SV& sv){return make_variable_init_declaration(sv);}; 
+        parser["PropertyConstr"] = [this](const SV& sv){return make_property_constraint_declaration(sv);};
+        parser["Constraint"] = [](const SV& sv){return F();};
+        parser["VariableName"] = [](const SV& sv){ return F::make_lvar(UNTYPED, LVar<Allocator>(std::any_cast<std::string>(sv[0])));};
+        parser["Identifier"] = [](const SV& sv){return sv.token_to_string();};
+        parser["RealType"] = [](const SV& sv){return So(So::Real);};
+        parser["Operators"] = [](const SV& sv){return sv.token_to_string();};
         parser["Statements"] = [this](const SV& sv){return make_statements(sv);}; // error, bad_any_cast()
         
         parser.set_logger([](size_t line, size_t col, const std::string& msg, const std::string& rule){
@@ -175,6 +202,12 @@ private:
         return F::make_false();
     }
 
+    F make_arity_error(const SV& sv, Sig sig, int expected, int obtained){
+        return make_error(sv, "Thy symbol `" + std::string(string_of_sig(sig)) +
+            "` expects `" + std::to_string(expected) + "` parameters" +
+            ", but we got `" + std::to_string(obtained) + "` parameters.");
+    }
+
     F make_statements(const SV& sv){
         std::cout << "test make_statements function" << std::endl;
         if (sv.size() == 1){
@@ -193,26 +226,18 @@ private:
     }
     
     F make_variable_init_declaration(const SV& sv){
-        auto name = std::any_cast<std::string>(sv[1]);
-        auto var_decl = make_variable_declaration(sv, name, sv[0], sv[2]);
-        
-        if (sv.size() == 4){
-            return F::make_binary(std::move(var_decl), AND, 
-                F::make_binary(
-                    F::make_lvar(UNTYPED, LVar<allocator_type>(name.data))),
-                    EQ, 
-                    f(sv[3])
-                );
-        }
-        else{
-            return std::move(var_decl);
-        }
+        // sv.size () == 2
+        // sv[0] = variable name
+        // sv[1] = type
+        auto name = std::any_cast<std::string>(sv[0]);
+        auto var_decl = make_variable_declaration(sv, name, sv[1]);
+        return std::move(var_decl);
     }
 
-    F make_variable_declaration(const SV& sv, const std::string& name, const std::any& typeVar, const std::any& annots){
+    F make_variable_declaration(const SV& sv, const std::string& name, const std::any& typeVar){
         try{
             auto ty = std::any_cast<So>(typeVar);
-            return make_existential(sv, ty, name, annots);
+            return make_existential(sv, ty, name);
         }
         catch(std::bad_any_cast){
             auto typeValue = f(typeVar);
@@ -221,47 +246,68 @@ private:
             if (!sort.has_value() || !sort->is_set()){
                 return make_error(sv, "We only type-value of variables to be of type Set.");
             }
-            auto exists = make_existential(sv, *(sort->sub), name, annots);
+            auto exists = make_existential(sv, *(sort->sub), name);
             return F::make_binary(std::move(exists), AND, std::move(inConstraint));
         }
     }
 
-    F make_existential(const SV& sv, const So& ty, const std::string& name, const std::any& sv_annots){
+    F make_existential(const SV& sv, const So& ty, const std::string& name){
         auto f = F::make_exists(UNTYPED, LVar<allocator_type>(name.data()), ty);
-        auto annots = std::any_cast<SV>(sv_annots);
-        return update_with_annotations(sv, f, annots);
-    }
-
-    F update_with_annotations(const SV& sv, F formula, const SV& annots){
-        for(int i = 0; i < annots.size(); ++i){
-            auto annot = std::any_cast<SV>(annots[i]);
-            auto name = std::any_cast<std::string>(annot[0]);
-            if (name == "abstract"){
-                AType ty = f(annot[1]).z(); // assignment of logic_int (int64_t) to ty (int) truncates ty (bug?)
-                formula.type_as(ty);
-            }
-            else if (name == "is_defined_var"){}
-            else if (name == "defines_var") {}
-            else if (name == "var_is_introduced"){}
-            else if (name == "output_var" && formula.is(F::E)){
-                output.add_var(battery::get<0>(formula.exists()));
-            }
-            else if (name == "output_array" && formula.is(F::E)){
-                auto array_name = std::any_cast<std::string>(sv[2]);
-                auto dims = std::any_cast<SV>(annot[1]);
-                output.add_array_var(array_name, battery::get<0>(formula.exists()), dims);
-            }
-            else{
-                if (!ignored_annotations.contains(name)){
-                    ignored_annotations.insert(name);
-                    std::cerr << "% WARNING: ANnotation " + name + " is unknown and was ignored." << std::endl;
-                }
-            }
+        if (f.is(F::E)){
+            output.add_var(battery::get<0>(f.exists()));
         }
-        return std::move(formula);
+        return std::move(f);
     }
 
+    F make_bound_constraint_declaration(const SV& sv){
+        std::string sign = std::any_cast<std::string>(sv[0]);
+        std::string variable_name = f(sv[1]).lv().data();
+        if (sign == "<="){
+            return make_linear_constraint(variable_name, LEQ, sv);
+        }
+        else if (sign == ">="){
+            return make_linear_constraint(variable_name, GEQ, sv);
+        }
+        else{
+            return make_error(sv, "Unknown sign `" + sign + "`.");
+        }
+    }
 
+    F make_property_constraint_declaration(const SV& sv){
+        std::string sign = std::any_cast<std::string>(sv[0]);
+        std::string variable_name = f(sv[1]).lv().data();
+        if (sign == "<="){
+            return make_linear_constraint(variable_name, LEQ, sv);
+        }
+        else if (sign == ">="){
+            return make_linear_constraint(variable_name, GEQ, sv);
+        }
+        else{
+            return make_error(sv, "Unknown sign `" + sign + "`.");
+        }
+        //TODO: Add disjunctive property which is 'or' & 'and' operator in the formula
+    }
+
+    F make_linear_constraint(const std::string& name, Sig sig, const SV& sv){
+        if (sv.size() != 3){
+            return make_error(sv, "`" + name + "` expects 2 parameters, but we got `" + std::to_string(sv.size() - 1) + "` parameters.");
+        }
+
+        FSeq lhs;
+        auto variable = f(sv[1]);
+        if (variable.is(F::LV)){
+            lhs.push_back(f(sv[1])); 
+        }
+        
+        std::cout << sv.sv() << std::endl;
+        auto rhs = f(sv[2]);
+        F constraint = 
+            lhs.size() == 1 
+            ? F::make_binary(std::move(lhs[0]), sig, rhs)
+            : F::make_binary(F::make_nary(ADD, std::move(lhs)), sig, rhs);
+        
+        return std::move(constraint);
+    }
 
     /*
     from onnx file information

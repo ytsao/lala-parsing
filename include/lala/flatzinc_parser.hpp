@@ -260,7 +260,7 @@ public:
     parser["SetValue"] = [](const SV &sv) { return F::make_set(Set({battery::make_tuple(F::make_set(Set{}), f(sv[0]))})); };
     parser["VariableDecl"] = [this](const SV &sv) { return make_variable_init_decl(sv); };
     parser["VarArrayDecl"] = [this](const SV &sv) { return make_variable_array_decl(sv); };
-    parser["ConstraintDecl"] = [this](const SV &sv) { return update_with_annotations(sv, f(sv[0]), std::any_cast<SV>(sv[1])); };
+    parser["ConstraintDecl"] = [this](const SV &sv) { return update_with_annotations(sv, f(sv[0]), std::any_cast<SV>(sv[1]));};
     parser["FunctionCall"] = [this](const SV &sv) { return function_call(sv); };
     parser["PredicateCall"] = [this](const SV &sv) { return predicate_call(sv); };
     parser["Statements"] = [this](const SV &sv) { return make_statements(sv); };

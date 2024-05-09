@@ -95,8 +95,8 @@ if(LALA_PARSING_BUILD_EXAMPLES)
 #target_link_libraries(example_xcsp3 PRIVATE lala_parsing)
 #endif()
 
-#add_executable(example_flatzinc example/flatzinc/flatzinc.cpp)
-#target_link_libraries(example_flatzinc PRIVATE lala_parsing)
+add_executable(example_flatzinc example/flatzinc/flatzinc.cpp)
+target_link_libraries(example_flatzinc PRIVATE lala_parsing)
 
 add_executable(example_smt example/smt/smt.cpp)
 target_link_libraries(example_smt PRIVATE lala_parsing)
