@@ -146,10 +146,11 @@ public:
 
             BoundConstr <- 'assert' '(' Operators VariableName Constant ')' 
             PropertyConstr <- 'assert' '(' Operators VariableName VariableName ')'
-            ConstraintDeclaration <- 'assert' '(' Constraint ')'
-            Constraint <- (Operators VariableName (Constant / VariableName))+
 
-            Operators <- ('<=' / '>=' / '>' / '<' / 'and' / 'or' / '(' / ')' )
+            ConstraintDeclaration <- 'assert' Constraint+
+            Constraint <- Operators+ Operators VariableName (Constant / VariableName) Operators+
+
+            Operators <- < '<=' / '>=' / '>' / '<' / 'and' / 'or' / '(' / ')' >
 
             ~Comment    <- ';' [^\n\r]* [ \n\r\t]*
             %whitespace <- [ \n\r\t]*
@@ -161,7 +162,7 @@ public:
         parser["BoundConstr"] = [this](const SV& sv) {return make_bound_constraint_declaration(sv);};
         parser["VariableDeclaration"] = [this](const SV& sv){return make_variable_init_declaration(sv);}; 
         parser["PropertyConstr"] = [this](const SV& sv){return make_property_constraint_declaration(sv);};
-        parser["Constraint"] = [](const SV& sv){return F();};
+        parser["ConstraintDeclaration"] = [](const SV& sv){return F();}; //TODO: generalize this part of code to tackle 'and' & 'or' operators
         parser["VariableName"] = [](const SV& sv){ return F::make_lvar(UNTYPED, LVar<Allocator>(std::any_cast<std::string>(sv[0])));};
         parser["Identifier"] = [](const SV& sv){return sv.token_to_string();};
         parser["RealType"] = [](const SV& sv){return So(So::Real);};
@@ -257,6 +258,14 @@ private:
             output.add_var(battery::get<0>(f.exists()));
         }
         return std::move(f);
+    }
+
+    F make_constraint_init_declaration(const SV& sv){
+        return F();
+    }
+
+    F make_constraint_declaration(){
+        return F();
     }
 
     F make_bound_constraint_declaration(const SV& sv){
