@@ -1,4 +1,4 @@
-#include "lala/SMT_parser.hpp"
+#include "lala/SMT2_parser.hpp"
 #include "battery/allocator.hpp"
 
 #include <iostream>
@@ -15,7 +15,8 @@ int main(){
     // test();
 
     // test for vnnlib file parsing
-    auto f = lala::parse_smt<battery::standard_allocator>("test_prop.vnnlib");
+    // auto f = lala::parse_smt<battery::standard_allocator>("test_prop.vnnlib");
+    auto f = lala::parse_smt2<battery::standard_allocator>("prop_7.vnnlib");
     if(!f) {
         std::cerr << "Could not parse the SMT file test_prop.vnnlib" << std::endl;
         return 1;

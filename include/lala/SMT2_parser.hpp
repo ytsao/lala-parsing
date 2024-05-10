@@ -24,7 +24,7 @@ typedef std::vector<std::pair<size_t, size_t>> layers;
 namespace lala{
 
 template<class Allocator>
-class SMTOutput{
+class SMT2Output{
     using bstring = battery::string<Allocator>;
     template<class T> using bvector = battery::vector<T, Allocator>;
     using array_dim_t = bvector<battery::tuple<size_t,size_t>>;
@@ -36,25 +36,25 @@ class SMTOutput{
 
 public:
     template<class Alloc2>
-    friend class SMTOutput;
+    friend class SMT2Output;
 
-    CUDA SMTOutput(const Allocator& alloc)
+    CUDA SMT2Output(const Allocator& alloc)
         : output_vars(alloc)
         , output_arrays(alloc) 
     {}
 
-    SMTOutput(SMTOutput&&) = default;
-    SMTOutput<Allocator>& operator=(const SMTOutput<Allocator>&) = default;
+    SMT2Output(SMT2Output&&) = default;
+    SMT2Output<Allocator>& operator=(const SMT2Output<Allocator>&) = default;
 
     template<class Alloc>
-    CUDA SMTOutput<Allocator>& operator=(const SMTOutput<Alloc>& other){
+    CUDA SMT2Output<Allocator>& operator=(const SMT2Output<Alloc>& other){
         output_vars = other.output_vars;
         output_arrays = other.output_arrays;
         return *this;
     }
 
     template<class Alloc2>
-    CUDA SMTOutput(const SMTOutput<Alloc2>& other, const Allocator& allocator = Allocator{})
+    CUDA SMT2Output(const SMT2Output<Alloc2>& other, const Allocator& allocator = Allocator{})
         : output_vars(other.output_vars, allocator)
         , output_arrays(other.output_arrays, allocator)
     {}
@@ -109,7 +109,7 @@ inline logic_real string_to_real(const std::string& s){
 
     
 template<class Allocator> 
-class SMTParser{
+class SMT2Parser{
     using allocator_type = Allocator;
     using F = TFormula<allocator_type>;
     using SV = peg::SemanticValues;
@@ -120,19 +120,19 @@ class SMTParser{
 
     bool error; // If an error was found during parsing.
     bool silent; // If we do not want to output error messages.
-    SMTOutput<Allocator>& output;
+    SMT2Output<Allocator>& output;
 
     // Contains all the annotations ignored.
     // It is used to avoid printing an error message more than once per annotation.
     std::set<std::string> ignored_annotations;
 
 public: 
-    SMTParser(SMTOutput<Allocator>& output): error(false), silent(false), output(output){}
+    SMT2Parser(SMT2Output<Allocator>& output): error(false), silent(false), output(output){}
 
     battery::shared_ptr<F, allocator_type> parse(const std::string& input){
-        //TODO: Missing implementation about post-condition contains 'and' & 'or' operators
+        //TODO: Missing implementation about post-condition contains 'and' & 'or' operators -> 20240510, done
         peg::parser parser(R"(
-            Statements <- ( '(' VariableDeclaration ')' / '(' BoundConstr ')' / '(' PropertyConstr ')' / Comment)+
+            Statements <- ( '(' VariableDeclaration ')' / '(' ConstraintDeclaration ')' / Comment)+
 
             VariableDeclaration <- 'declare-const' Identifier Type
             VariableName <- Identifier
@@ -144,13 +144,11 @@ public:
                 / '-inf'
                 / [+-]? [0-9]+ (('.' (&'..' / !'.') [0-9]*) / ([Ee][+-]?[0-9]+)) ) >
 
-            BoundConstr <- 'assert' '(' Operators VariableName Constant ')' 
-            PropertyConstr <- 'assert' '(' Operators VariableName VariableName ')'
+            ConstraintDeclaration <- 'assert' Constraint
+            Constraint <- '(' Operators ( Constraint+ / VariableName (Constant / VariableName) ) ')'
 
-            ConstraintDeclaration <- 'assert' Constraint+
-            Constraint <- Operators+ Operators VariableName (Constant / VariableName) Operators+
 
-            Operators <- < '<=' / '>=' / '>' / '<' / 'and' / 'or' / '(' / ')' >
+            Operators <- < '<=' / '>=' / '>' / '<' / 'or' / 'and' >
 
             ~Comment    <- ';' [^\n\r]* [ \n\r\t]*
             %whitespace <- [ \n\r\t]*
@@ -159,15 +157,14 @@ public:
         assert(static_cast<bool>(parser) == true);
 
         parser["Constant"] =[](const SV& sv){return F::make_real(string_to_real(sv.token_to_string()));};
-        parser["BoundConstr"] = [this](const SV& sv) {return make_bound_constraint_declaration(sv);};
-        parser["VariableDeclaration"] = [this](const SV& sv){return make_variable_init_declaration(sv);}; 
-        parser["PropertyConstr"] = [this](const SV& sv){return make_property_constraint_declaration(sv);};
-        parser["ConstraintDeclaration"] = [](const SV& sv){return F();}; //TODO: generalize this part of code to tackle 'and' & 'or' operators
-        parser["VariableName"] = [](const SV& sv){ return F::make_lvar(UNTYPED, LVar<Allocator>(std::any_cast<std::string>(sv[0])));};
-        parser["Identifier"] = [](const SV& sv){return sv.token_to_string();};
         parser["RealType"] = [](const SV& sv){return So(So::Real);};
+        parser["Identifier"] = [](const SV& sv){return sv.token_to_string();};
         parser["Operators"] = [](const SV& sv){return sv.token_to_string();};
-        parser["Statements"] = [this](const SV& sv){return make_statements(sv);}; // error, bad_any_cast()
+        parser["VariableDeclaration"] = [this](const SV& sv){return make_variable_init_declaration(sv);};
+        parser["VariableName"] = [](const SV& sv){ return F::make_lvar(UNTYPED, LVar<Allocator>(std::any_cast<std::string>(sv[0])));};
+        parser["ConstraintDeclaration"] = [](const SV& sv){return F();}; 
+        parser["Constraint"] = [this](const SV& sv){return make_constraint(sv);}; 
+        parser["Statements"] = [this](const SV& sv){return make_statements(sv);};
         
         parser.set_logger([](size_t line, size_t col, const std::string& msg, const std::string& rule){
             std::cerr << line << ":" << col << ": " << msg << "\n";
@@ -260,62 +257,58 @@ private:
         return std::move(f);
     }
 
-    F make_constraint_init_declaration(const SV& sv){
-        return F();
-    }
-
-    F make_constraint_declaration(){
-        return F();
-    }
-
-    F make_bound_constraint_declaration(const SV& sv){
-        std::string sign = std::any_cast<std::string>(sv[0]);
-        std::string variable_name = f(sv[1]).lv().data();
-        if (sign == "<="){
+    F make_constraint(const SV& sv){
+        // test -------------------------------------------
+        std::cout << sv.sv() << std::endl;
+        std::cout << "length: " << sv.size() << std::endl;
+        
+        std::string _operator = std::any_cast<std::string>(sv[0]); // since "operator" is keyword in C++, if we use it as variable name, it will cause error.
+        std::string variable_name;
+        if (_operator == "<="){
+            variable_name = f(sv[1]).lv().data();
             return make_linear_constraint(variable_name, LEQ, sv);
         }
-        else if (sign == ">="){
+        else if (_operator == ">="){
+            variable_name = f(sv[1]).lv().data();
             return make_linear_constraint(variable_name, GEQ, sv);
         }
-        else{
-            return make_error(sv, "Unknown sign `" + sign + "`.");
+        else if (_operator == "and"){
+            make_nary_constraint(AND, sv);
         }
-    }
-
-    F make_property_constraint_declaration(const SV& sv){
-        std::string sign = std::any_cast<std::string>(sv[0]);
-        std::string variable_name = f(sv[1]).lv().data();
-        if (sign == "<="){
-            return make_linear_constraint(variable_name, LEQ, sv);
-        }
-        else if (sign == ">="){
-            return make_linear_constraint(variable_name, GEQ, sv);
+        else if (_operator == "or"){
+            make_nary_constraint(OR, sv);
         }
         else{
-            return make_error(sv, "Unknown sign `" + sign + "`.");
+            return make_error(sv, "Unknown operator `" + _operator + "`.");
         }
-        //TODO: Add disjunctive property which is 'or' & 'and' operator in the formula
+        return F();
     }
 
     F make_linear_constraint(const std::string& name, Sig sig, const SV& sv){
         if (sv.size() != 3){
             return make_error(sv, "`" + name + "` expects 2 parameters, but we got `" + std::to_string(sv.size() - 1) + "` parameters.");
         }
-
         FSeq lhs;
         auto variable = f(sv[1]);
         if (variable.is(F::LV)){
             lhs.push_back(f(sv[1])); 
         }
-        
         std::cout << sv.sv() << std::endl;
         auto rhs = f(sv[2]);
         F constraint = 
             lhs.size() == 1 
             ? F::make_binary(std::move(lhs[0]), sig, rhs)
             : F::make_binary(F::make_nary(ADD, std::move(lhs)), sig, rhs);
-        
         return std::move(constraint);
+    }
+
+    F make_nary_constraint(Sig sig, const SV& sv){
+        // sv[0] = "and" / "or"
+        FSeq seq;
+        for(int i = 1; i < sv.size(); ++i){
+            seq.push_back(f(sv[i]));
+        }
+        return F::make_nary(sig, std::move(seq));
     }
 
     /*
@@ -430,22 +423,23 @@ private:
 }
 
     /*
-    Parse an SMT-LIB file and return the corresponding formula.
+    Parse an SMT-LIB file (.smt2) and return the corresponding formula.
     Ref:
     */
     template<class Allocator>
-    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt_str(const std::string& input, SMTOutput<Allocator>& output){
-        impl::SMTParser<Allocator> parser(output);
-        return parser.parse(input);
+    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt2_str(const std::string& input, SMT2Output<Allocator>& output){
+        impl::SMT2Parser<Allocator> parser(output);
+        auto f = parser.parse(input);
+        return f;
     }
 
     template<class Allocator>
-    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt(const std::string& filename, SMTOutput<Allocator>& output){
+    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt2(const std::string& filename, SMT2Output<Allocator>& output){
         std::ifstream t(filename);
 
         if(t.is_open()){
             std::string input((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
-            return parse_smt_str(input, output);
+            return parse_smt2_str(input, output);
         }
         else{
             std::cerr << "FIle `" << filename << "` does not exist:." << std::endl;
@@ -454,15 +448,15 @@ private:
     }
 
     template<class Allocator>
-    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt_str(const std::string& input, const Allocator& allocator = Allocator()){
-        SMTOutput<Allocator> output(allocator);
-        return parse_smt_str(input, output);
+    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt2_str(const std::string& input, const Allocator& allocator = Allocator()){
+        SMT2Output<Allocator> output(allocator);
+        return parse_smt2_str(input, output);
     }
 
     template<class Allocator>
-    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt(const std::string& filename, const Allocator& allocator = Allocator()){
-        SMTOutput<Allocator> output(allocator);
-        return parse_smt(filename, output);
+    battery::shared_ptr<TFormula<Allocator>, Allocator> parse_smt2(const std::string& filename, const Allocator& allocator = Allocator()){
+        SMT2Output<Allocator> output(allocator);
+        return parse_smt2(filename, output);
     }
 }
 
